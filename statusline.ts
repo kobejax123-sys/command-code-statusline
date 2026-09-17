@@ -58,9 +58,20 @@ const sessionCwd = (file: string) => {
 	try {
 		const fd = openSync(file, 'r');
 		try {
-			const buffer = Buffer.alloc(2048);
-			const bytes = readSync(fd, buffer, 0, 2048, 0);
-			const entry = JSON.parse(buffer.toString('utf8', 0, bytes).split('\n')[0]);
+			// The header is a single JSON object on the first line and its length
+			// is not bounded in practice, so read forward until the newline
+			// instead of assuming it fits in one fixed-size buffer.
+			let text = '';
+			let offset = 0;
+			while (offset < 1_048_576) {
+				const buffer = Buffer.alloc(4096);
+				const bytes = readSync(fd, buffer, 0, 4096, offset);
+				if (bytes <= 0) break;
+				offset += bytes;
+				text += buffer.toString('utf8', 0, bytes);
+				if (text.includes('\n')) break;
+			}
+			const entry = JSON.parse(text.split('\n')[0]);
 			return typeof entry?.cwd === 'string' ? entry.cwd : undefined;
 		} finally {
 			closeSync(fd);
@@ -147,17 +158,24 @@ const scanTail = (file: string, want: (entry: any) => boolean, limit = 16 * 1024
 	}
 };
 
+// Cache reads are a subset of inputTokens, so the ratio is bounded by 100. The
+// clamp matters if a provider ever reports inputTokens without the cached part.
+const cacheHitRate = (usage: any) => {
+	const input = usage?.inputTokens ?? 0;
+	if (!(input > 0)) return -1;
+	return Math.min(100, ((usage.cacheReadTokens ?? 0) / input) * 100);
+};
+
 const readHistory = (cwd: string) => {
 	const file = sessionFile(cwd);
 	if (!file) return undefined;
 	const entry = scanTail(file, (candidate) => !!candidate?.usage?.inputTokens);
 	if (!entry) return undefined;
-	const input = entry.usage.inputTokens;
 	return {
 		model: typeof entry.model === 'string' ? entry.model : '',
 		effort: typeof entry.effort === 'string' ? entry.effort : '',
-		used: input,
-		hit: ((entry.usage.cacheReadTokens ?? 0) / input) * 100,
+		used: entry.usage.inputTokens,
+		hit: cacheHitRate(entry.usage),
 	};
 };
 
@@ -222,7 +240,24 @@ const shortModel = (model: string) =>
 
 const EFFORT_RANK: Record<string, number> = {low: 1, medium: 2, high: 3, xhigh: 4, max: 5};
 
-const effortIcon = (effort: string) => '✦'.repeat(EFFORT_RANK[effort.toLowerCase()] ?? 1);
+// Returns the stars and their trailing space, or nothing when the level is not
+// in the table — an unknown level rendered as a single star would read as
+// "✦ default", implying a low-effort rank that was never reported.
+const effortIcon = (effort: string) => {
+	const rank = EFFORT_RANK[effort.toLowerCase()];
+	return rank ? `${'✦'.repeat(rank)} ` : '';
+};
+
+// 0 = not set, >0 = token count, -1 = unparseable (the caller warns).
+const parseContextOverride = (raw: unknown) => {
+	const text = String(raw ?? '').trim();
+	if (!text) return 0;
+	const match = /^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(text);
+	if (!match) return -1;
+	const scale = match[2] ? (match[2].toLowerCase() === 'm' ? 1_000_000 : 1_000) : 1;
+	const value = Math.round(Number(match[1]) * scale);
+	return value > 0 ? value : -1;
+};
 
 const windowFor = (model: string, override: number) => {
 	if (override > 0) return {limit: override, estimated: false};
@@ -244,7 +279,7 @@ export default function statusline(cmd: ModApi) {
 	cmd.addFlag('statusline.context', {
 		type: 'string',
 		default: '',
-		description: 'Override the context window size in tokens',
+		description: 'Override the context window size in tokens (e.g. 200000 or 1M)',
 	});
 
 	let model = '';
@@ -268,7 +303,10 @@ export default function statusline(cmd: ModApi) {
 		if (branch) segs.push(`${style(PURPLE, '⎇')} ${style(PURPLE, branch)}`);
 		if (model) {
 			if (used > 0) {
-				const {limit, estimated} = windowFor(model, Number(cmd.getFlag('statusline.context')) || 0);
+				const flag = cmd.getFlag('statusline.context');
+				const override = parseContextOverride(flag);
+				if (override < 0) warn(`invalid statusline.context "${String(flag)}": expected a token count like 200000 or 1M`);
+				const {limit, estimated} = windowFor(model, override > 0 ? override : 0);
 				const raw = (used / limit) * 100;
 				const pct = Math.min(100, Math.round(raw));
 				const tone = raw >= 85 ? RED : raw >= 60 ? YELLOW : GREEN;
@@ -287,7 +325,7 @@ export default function statusline(cmd: ModApi) {
 				segs.push(style(FAINT, '⚡ --'));
 			}
 
-			const level = effort ? style(PURPLE, `${effortIcon(effort)} ${effort}`) : style(FAINT, 'default');
+			const level = effort ? style(PURPLE, `${effortIcon(effort)}${effort}`) : style(FAINT, 'default');
 			segs.push(`${style(CYAN, shortModel(model))} ${level}`);
 		}
 		cmd.ui.setStatus(segs.join(style(SEP, ' · ')));
@@ -376,9 +414,8 @@ export default function statusline(cmd: ModApi) {
 		// Cleared rather than kept when the field is absent: a switch to a model
 		// without effort support would otherwise keep showing the old value.
 		effort = event.effort ? String(event.effort) : '';
-		const input = event.usage.inputTokens ?? 0;
-		used = input;
-		hit = input > 0 ? ((event.usage.cacheReadTokens ?? 0) / input) * 100 : -1;
+		used = event.usage.inputTokens ?? 0;
+		hit = cacheHitRate(event.usage);
 
 		draw();
 	});
@@ -440,13 +477,21 @@ export default function statusline(cmd: ModApi) {
 			draw();
 			timer = setInterval(() => {
 				ticks += 1;
-				if (ticks % 4 === 1) void refreshBranch();
 				attachWatcher();
+				// Bounded retries: a resumed session may not have flushed a usage
+				// record yet, so poll a few times. After these we stop compensating,
+				// so if the user never sends a message `used` stays at the restored
+				// value (or "--") until the first request reports the real number.
 				if (resumed && used === 0 && historyTries < 8) {
 					historyTries += 1;
 					tryHistory();
 				}
-				draw();
+				// Redraw on the branch-refresh tick only. Everything else is driven
+				// by events, so drawing on every tick just re-renders identical text.
+				if (ticks % 4 === 1) {
+					void refreshBranch();
+					draw();
+				}
 			}, 15_000);
 			timer.unref?.();
 
