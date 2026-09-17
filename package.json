@@ -1,0 +1,29 @@
+{
+	"name": "command-code-statusline",
+	"version": "1.0.0",
+	"description": "Command Code status line: project directory, git branch, context usage, prompt-cache hit rate, and model + reasoning effort",
+	"license": "MIT",
+	"author": "yuehui.xu",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/kobejax123-sys/command-code-statusline.git"
+	},
+	"keywords": [
+		"command-code",
+		"command-code-mod",
+		"statusline",
+		"status-bar",
+		"tui"
+	],
+	"files": [
+		"statusline.ts",
+		"README.md",
+		"README.zh.md",
+		"LICENSE"
+	],
+	"commandcode": {
+		"mods": [
+			"./statusline.ts"
+		]
+	}
+}
