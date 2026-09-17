@@ -21,6 +21,13 @@
 		"README.zh.md",
 		"LICENSE"
 	],
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/node": "^22.20.3",
+		"typescript": "^7.0.2"
+	},
 	"commandcode": {
 		"mods": [
 			"./statusline.ts"
