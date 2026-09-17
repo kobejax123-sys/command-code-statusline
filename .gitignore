@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .DS_Store
+
+# Local-only review record; kept on disk, intentionally not tracked.
+CODE-REVIEW.md
