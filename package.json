@@ -22,6 +22,7 @@
 		"LICENSE"
 	],
 	"scripts": {
+		"test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test statusline.test.ts",
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {

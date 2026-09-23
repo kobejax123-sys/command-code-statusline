@@ -21,7 +21,7 @@ import {basename, join} from 'node:path';
 
 import type {ModApi} from '@commandcode/harness';
 
-const DEFAULT_WINDOW = 200_000;
+export const DEFAULT_WINDOW = 200_000;
 
 const SNAPSHOT_TYPE = 'statusline/snapshot';
 
@@ -182,7 +182,12 @@ const readHistory = (cwd: string) => {
 // Context windows for the models this CLI serves. There is no API to ask for
 // this, so it is a lookup table; anything unmatched shows as an estimate (≈) and
 // can be overridden with --mod-option statusline.context=<tokens>.
-const WINDOW_RULES: ReadonlyArray<readonly [string, number]> = [
+//
+// Order is load-bearing: matching is `includes()` and stops at the first hit,
+// so a specific needle must sit above every needle it contains
+// (`claude-sonnet` before `claude`, `glm-5.3-flash` before `glm-5.3`).
+// statusline.test.ts pins this.
+export const WINDOW_RULES: ReadonlyArray<readonly [string, number]> = [
 	['kimi-k2.7-code-highspeed', 262_144],
 	['qwen3.8-27b', 262_144],
 	['glm-5.3-flashx', 1_000_000],
@@ -273,7 +278,7 @@ const parseContextOverride = (raw: unknown) => {
 	return value > 0 ? value : -1;
 };
 
-const windowFor = (model: string, override: number) => {
+export const windowFor = (model: string, override: number) => {
 	if (override > 0) return {limit: override, estimated: false};
 	const id = model.toLowerCase();
 	for (const [needle, size] of WINDOW_RULES) if (id.includes(needle)) return {limit: size, estimated: false};
@@ -465,6 +470,23 @@ export default function statusline(cmd: ModApi) {
 		onSessionStart: (event: any, ctx: any) => {
 			if (timer) clearInterval(timer);
 			timer = undefined;
+
+			// Switching sessions inside one process (`/clear`, or a resume while
+			// running) reuses this closure, so every displayed field has to fall
+			// back to its own "nothing yet" value before anything is restored.
+			// Otherwise the previous session's numbers read as this session's,
+			// and `tryHistory` no-ops at `used !== 0`, so resuming a session with
+			// no snapshot never recovers until the first request.
+			//
+			// `visible` is deliberately left alone: it is a user choice, not
+			// session state, and clearing it would un-hide a hidden status line.
+			model = '';
+			effort = '';
+			used = 0;
+			hit = -1;
+			branch = '';
+			historyTries = 0;
+			warned = false;
 
 			try {
 				const defaults = readDefaults();

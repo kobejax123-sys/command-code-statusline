@@ -33,6 +33,8 @@ ln -sf "$PWD/statusline.ts" ~/.commandcode/mods/statusline.ts
 
 之后每次改完 `/reload` 即可生效。
 
+两个校验都不需要测试框架：`npm run typecheck`（严格 `tsc`）和 `npm test`（Node 内置 runner，需 Node >= 22.18）。`npm test` 会把 `WINDOW_RULES` 与 Command Code 公布的各模型上下文窗口逐条比对——其中也包括「这张表的正确性依赖数组顺序」这一点，所以改动这张表后务必跑一次。
+
 ## 用法
 
 | 命令 | 作用 |

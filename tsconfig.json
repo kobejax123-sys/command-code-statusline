@@ -7,9 +7,10 @@
 		"types": ["node"],
 		"strict": true,
 		"noEmit": true,
+		"allowImportingTsExtensions": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,
 		"forceConsistentCasingInFileNames": true
 	},
-	"include": ["statusline.ts", "types/**/*.d.ts"]
+	"include": ["statusline.ts", "statusline.test.ts", "types/**/*.d.ts"]
 }

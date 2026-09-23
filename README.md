@@ -33,6 +33,8 @@ ln -sf "$PWD/statusline.ts" ~/.commandcode/mods/statusline.ts
 
 After that `/reload` picks up every change.
 
+Two checks, no test framework required: `npm run typecheck` (strict `tsc`) and `npm test` (Node's built-in runner, needs Node >= 22.18). `npm test` compares `WINDOW_RULES` against the context windows Command Code publishes — including the fact that the table's *order* is what makes it correct — so run it after touching that table.
+
 ## Usage
 
 | Command | Effect |
